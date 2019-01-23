@@ -223,9 +223,14 @@ static void frame_read_callback(scarletbook_handle_t* handle, uint8_t* frame_dat
                                 size_t frame_size, void* userdata)
 {
   SACDContext* ctx = (SACDContext*)userdata;
-  size_t actual = (*ctx->ft->handler.write)(ctx->ft, frame_data, frame_size);
-  ctx->decode_buffer.WriteData((char*)ctx->frame_buffer, actual);
-  ctx->ft->write_length += actual;
+  if (ctx->ft->dsd_encoded_export && ctx->ft->dst_encoded_import)
+    dst_decoder_decode(ctx->ft->dst_decoder, frame_data, frame_size);
+  else
+  {
+    size_t actual = (*ctx->ft->handler.write)(ctx->ft, frame_data, frame_size);
+    ctx->decode_buffer.WriteData((char*)ctx->frame_buffer, actual);
+    ctx->ft->write_length += actual;
+  }
 }
 
 static void frame_decoded_callback(uint8_t* frame_data, size_t frame_size, void* userdata)
@@ -288,7 +293,7 @@ void* CSACDFile::Open(const VFSURL& url)
 
   result->output = scarletbook_output_create(result->handle, 0, 0, 0);
   scarletbook_output_enqueue_track(result->output, result->handle->twoch_area_idx,
-                                   track-1, (char*)url.url, (char*)"dsf", 0);
+                                   track-1, (char*)url.url, (char*)"dsf", 1);
 
   scarletbook_frame_init(result->handle);
 
@@ -312,6 +317,11 @@ void* CSACDFile::Open(const VFSURL& url)
   dsf_handle_t* handle = (dsf_handle_t*)result->ft->priv;
   handle->header_size = (result->end_lsn-result->ft->start_lsn)*SACD_LSN_SIZE; // store approximate length here for header injection
   (*result->ft->handler.startwrite)(result->ft);
+
+  if (result->ft->dsd_encoded_export && result->ft->dst_encoded_import)
+    result->ft->dst_decoder = dst_decoder_create(result->ft->channel_count,
+                                                 frame_decoded_callback,
+                                                 frame_error_callback, result);
 
   // set the encryption range
   if (result->handle->area[0].area_toc != 0)
@@ -443,6 +453,8 @@ ssize_t CSACDFile::Read(void* context, void* lpBuf, size_t uiBufSize)
 bool CSACDFile::Close(void* context)
 {
   SACDContext* ctx = (SACDContext*)context;
+  if (ctx->ft->dsd_encoded_export && ctx->ft->dst_encoded_import)
+    dst_decoder_destroy(ctx->ft->dst_decoder);
   free(ctx->output->read_buffer);
   free(ctx->output);
   scarletbook_close(ctx->handle);

@@ -212,6 +212,8 @@ struct SACDContext
   uint8_t* frame_buffer;
   CRingBuffer decode_buffer;
   int64_t pos;
+  int area;
+
   SACDContext() : reader(nullptr), handle(nullptr), output(nullptr), encrypted_start_1(0),
                   encrypted_start_2(0), encrypted_end_1(0), encrypted_end_2(0),
                   checked_for_non_encrypted_disc(0), non_encrypted_disc(0), pos(0)
@@ -250,7 +252,8 @@ static void frame_error_callback(int frame_count, int frame_error_code,
 
 }
 
-class CSACDFile : public kodi::addon::CInstanceVFS
+class ATTRIBUTE_HIDDEN CSACDFile : public kodi::addon::CInstanceVFS,
+                                   public kodi::addon::CAddonBase
 {
 public:
   CSACDFile(KODI_HANDLE instance) : CInstanceVFS(instance) { }
@@ -269,7 +272,10 @@ public:
                     CVFSCallbacks callbacks) override
   { std::string rpath; return ContainsFiles(url, items, rpath); }
 
+  ADDON_STATUS SetSetting(const std::string& settingName, const kodi::CSettingValue& settingValue) override;
+
   std::vector<uint8_t> id3_buffer;
+  bool prefer_mchan = false;
 };
 
 void* CSACDFile::Open(const VFSURL& url)
@@ -290,9 +296,14 @@ void* CSACDFile::Open(const VFSURL& url)
     delete result;
     return nullptr;
   }
+  result->area = result->handle->twoch_area_idx;
+  if (prefer_mchan || result->handle->twoch_area_idx == -1)
+    result->area = result->handle->mulch_area_idx;
+
+  std::cout << "hmm " << result->handle->mulch_area_idx << " " << result->handle->twoch_area_idx << " " << result->area << std::endl;
 
   result->output = scarletbook_output_create(result->handle, 0, 0, 0);
-  scarletbook_output_enqueue_track(result->output, result->handle->twoch_area_idx,
+  scarletbook_output_enqueue_track(result->output, result->area,
                                    track-1, (char*)url.url, (char*)"dsf", 1);
 
   scarletbook_frame_init(result->handle);
@@ -534,6 +545,19 @@ bool CSACDFile::ContainsFiles(const VFSURL& url, std::vector<kodi::vfs::CDirEntr
     }
   }
   return false;
+}
+
+ADDON_STATUS CSACDFile::SetSetting(const std::string& settingName,
+                                   const kodi::CSettingValue& settingValue)
+{
+  if (settingName.empty() || settingValue.empty())
+    return ADDON_STATUS_UNKNOWN;
+
+  if (settingName == "mchan")
+  {
+    prefer_mchan = settingValue.GetBoolean();
+    return ADDON_STATUS_OK;
+  }
 }
 
 
